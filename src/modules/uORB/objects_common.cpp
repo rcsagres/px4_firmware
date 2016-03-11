@@ -276,3 +276,6 @@ ORB_DEFINE(vehicle_command_ack, struct vehicle_command_ack_s);
 
 #include "topics/ekf2_innovations.h"
 ORB_DEFINE(ekf2_innovations, struct ekf2_innovations_s);
+
+#include "topics/angular_acc.h"
+ORB_DEFINE(angular_acc, struct angular_acc_s);
