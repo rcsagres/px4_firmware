@@ -133,12 +133,12 @@ private:
 	}		_params_handles;		/**< handles for interesting parameters */
 
 	/* parameter vectors */
-	Vector<5>	_theta_r_roll[5];
-	Vector<5>	_theta_w_roll[5];
-	Vector<5>	_theta_r_pitch[5];
-	Vector<5>	_theta_w_pitch[5];
-	Vector<5>	_theta_r_yaw[5];
-	Vector<5>	_theta_w_yaw[5];
+	Vector<5>	_theta_r_roll;
+	Vector<5>	_theta_w_roll;
+	Vector<5>	_theta_r_pitch;
+	Vector<5>	_theta_w_pitch;
+	Vector<5>	_theta_r_yaw;
+	Vector<5>	_theta_w_yaw;
 
 	/* subscriptions */
 	Vector<3>	_cur_rates;
@@ -151,6 +151,10 @@ private:
 	Vector<5> _w_pitch;
 	Vector<5> _ref_yaw;
 	Vector<5> _w_yaw;
+
+	float _cur_acc_roll;
+	float _cur_acc_pitch;
+	float _cur_acc_yaw;
 
 
 	hrt_abstime _vel_prev_t = 0;
@@ -169,7 +173,7 @@ private:
 
 	bool init();
 
-	bool update(float dt);
+	bool update();
 
 };
 
@@ -284,7 +288,6 @@ void AngularAccEstimator::task_main()
 	px4_pollfd_struct_t fds[1] = {};
 	fds[0].fd = _attitude_sub;
 	fds[0].events = POLLIN;
-	float i = 0.0f;
 
 	while (!_task_should_exit) {
 		int ret = px4_poll(fds, 1, 100);
@@ -304,7 +307,7 @@ void AngularAccEstimator::task_main()
 			PX4_WARN("Q POLL TIMEOUT");
 			continue;
 		}
-
+		
 		update_parameters(false);
 
 		// Update attitude
@@ -314,16 +317,41 @@ void AngularAccEstimator::task_main()
 		{
 			// Feed validator with recent sensor data
 			// Feed validator with recent reference data
+			continue;
+		}
 
+		vehicle_rates_setpoint_s rates_reference;
+
+		orb_copy(ORB_ID(vehicle_rates_setpoint), _rates_setpoint_sub, &rates_reference);
+
+		// update measurement and reference vectors
+		int i = 0;
+		for(i = 1; i < 5; i++) {
+				_w_roll(i) =  _w_roll(i-1);
+				_ref_roll(i) = _ref_roll(i-1);
+				_w_pitch(i) = _w_pitch(i-1);
+				_ref_pitch(i) = _ref_pitch(i-1);
+				_w_yaw(i) = _w_yaw(i-1);
+				_ref_yaw(i) = _ref_yaw(i-1);
+
+		}
+		_w_roll(0) = attitude.rollspeed;
+		_ref_roll(0) = rates_reference.roll;
+		_w_pitch(0) = attitude.pitchspeed;
+		_ref_pitch(0) = rates_reference.pitch;
+		_w_yaw(0) = attitude.yawspeed;
+		_ref_yaw(0) = rates_reference.yaw;
+
+		if(!update()) {
+				continue;
 		}
 		
 		int angular_acc_inst;
 		angular_acc_s angular_acc;
-		i++;
 		angular_acc.timestamp = attitude.timestamp;
-		angular_acc.rollacc = attitude.roll;
-		angular_acc.pitchacc = attitude.pitch;
-		angular_acc.yawacc = attitude.yaw;
+		angular_acc.rollacc = _cur_acc_roll;
+		angular_acc.pitchacc = _cur_acc_pitch;
+		angular_acc.yawacc = _cur_acc_yaw;
 		/* publish to control state topic */
 		orb_publish_auto(ORB_ID(angular_acc), &_angular_acc_pub, &angular_acc, &angular_acc_inst, ORB_PRIO_HIGH);
 	}
@@ -342,28 +370,30 @@ void AngularAccEstimator::update_parameters(bool force)
 		parameter_update_s param_update;
 
 		orb_copy(ORB_ID(parameter_update), _params_sub, &param_update);
-		for(i=0;i < 5;i++){
-			param_get(_params_handles.theta_r_roll[i], &_theta_r_roll[i]);
-			param_get(_params_handles.theta_w_roll[i], &_theta_w_roll[i]);
-			param_get(_params_handles.theta_r_pitch[i], &_theta_r_pitch[i]);
-			param_get(_params_handles.theta_w_pitch[i], &_theta_w_pitch[i]);
-			param_get(_params_handles.theta_r_yaw[i], &_theta_r_yaw[i]);
-			param_get(_params_handles.theta_w_yaw[i], &_theta_w_yaw[i]);
+		for(i=0;i < 5;i++){ 
+			param_get(_params_handles.theta_r_roll[i], &_theta_r_roll(i));
+			param_get(_params_handles.theta_w_roll[i], &_theta_w_roll(i));
+			param_get(_params_handles.theta_r_pitch[i], &_theta_r_pitch(i));
+			param_get(_params_handles.theta_w_pitch[i], &_theta_w_pitch(i));
+			param_get(_params_handles.theta_r_yaw[i], &_theta_r_yaw(i));
+			param_get(_params_handles.theta_w_yaw[i], &_theta_w_yaw(i));
 		}
-
-
-
-
-
 	}
 }
 
 bool AngularAccEstimator::init()
 {
+	_ref_roll.zero();
+	_w_roll.zero();
+	_ref_pitch.zero();
+	_w_pitch.zero();
+	_ref_yaw.zero();
+	_w_yaw.zero();
+	
 	return true;
 }
 
-bool AngularAccEstimator::update(float dt)
+bool AngularAccEstimator::update()
 {
 	if (!_inited) {
 
@@ -373,82 +403,12 @@ bool AngularAccEstimator::update(float dt)
 
 		return init();
 	}
-/*
-	Quaternion q_last = _q;
+	
+	// update angular accelerations
+	_cur_acc_roll = _theta_w_roll*_w_roll + _theta_r_roll*_ref_roll;
+	_cur_acc_pitch = _theta_w_pitch*_w_pitch + _theta_r_pitch*_ref_pitch;
+	_cur_acc_yaw = _theta_w_yaw*_w_yaw + _theta_r_yaw*_ref_yaw;
 
-	// Angular rate of correction
-	Vector<3> corr;
-
-	if (_ext_hdg_mode > 0 && _ext_hdg_good) {
-		if (_ext_hdg_mode == 1) {
-			// Vision heading correction
-			// Project heading to global frame and extract XY component
-			Vector<3> vision_hdg_earth = _q.conjugate(_vision_hdg);
-			float vision_hdg_err = _wrap_pi(atan2f(vision_hdg_earth(1), vision_hdg_earth(0)));
-			// Project correction to body frame
-			corr += _q.conjugate_inversed(Vector<3>(0.0f, 0.0f, -vision_hdg_err)) * _w_ext_hdg;
-		}
-
-		if (_ext_hdg_mode == 2) {
-			// Mocap heading correction
-			// Project heading to global frame and extract XY component
-			Vector<3> mocap_hdg_earth = _q.conjugate(_mocap_hdg);
-			float mocap_hdg_err = _wrap_pi(atan2f(mocap_hdg_earth(1), mocap_hdg_earth(0)));
-			// Project correction to body frame
-			corr += _q.conjugate_inversed(Vector<3>(0.0f, 0.0f, -mocap_hdg_err)) * _w_ext_hdg;
-		}
-	}
-
-	if (_ext_hdg_mode == 0  || !_ext_hdg_good) {
-		// Magnetometer correction
-		// Project mag field vector to global frame and extract XY component
-		Vector<3> mag_earth = _q.conjugate(_mag);
-		float mag_err = _wrap_pi(atan2f(mag_earth(1), mag_earth(0)) - _mag_decl);
-		// Project magnetometer correction to body frame
-		corr += _q.conjugate_inversed(Vector<3>(0.0f, 0.0f, -mag_err)) * _w_mag;
-	}
-
-	_q.normalize();
-
-	// Accelerometer correction
-	// Project 'k' unit vector of earth frame to body frame
-	// Vector<3> k = _q.conjugate_inversed(Vector<3>(0.0f, 0.0f, 1.0f));
-	// Optimized version with dropped zeros
-	Vector<3> k(
-		2.0f * (_q(1) * _q(3) - _q(0) * _q(2)),
-		2.0f * (_q(2) * _q(3) + _q(0) * _q(1)),
-		(_q(0) * _q(0) - _q(1) * _q(1) - _q(2) * _q(2) + _q(3) * _q(3))
-	);
-
-	corr += (k % (_accel - _pos_acc).normalized()) * _w_accel;
-
-	// Gyro bias estimation
-	_gyro_bias += corr * (_w_gyro_bias * dt);
-
-	for (int i = 0; i < 3; i++) {
-		_gyro_bias(i) = math::constrain(_gyro_bias(i), -_bias_max, _bias_max);
-	}
-
-	_rates = _gyro + _gyro_bias;
-
-	// Feed forward gyro
-	corr += _rates;
-
-	// Apply correction to state
-	_q += _q.derivative(corr) * dt;
-
-	// Normalize quaternion
-	_q.normalize();
-
-	if (!(PX4_ISFINITE(_q(0)) && PX4_ISFINITE(_q(1)) &&
-	      PX4_ISFINITE(_q(2)) && PX4_ISFINITE(_q(3)))) {
-		// Reset quaternion to last good state
-		_q = q_last;
-		_rates.zero();
-		_gyro_bias.zero();
-		return false;
-	}
-*/
 	return true;
 }
 
