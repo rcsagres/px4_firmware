@@ -1,0 +1,34 @@
+#!/usr/bin/fish
+# Substitute new values into parameter c source
+# Rodrigo Coelho 2016
+#
+
+set subs_file "angular_acc_estimator_params.c"
+set new_file "new_"$subs_file
+set vars_file "dw_predictor"
+
+function substitute
+	if test (count $argv) -lt 4
+			echo "usage: substitute_params line type [ROLL|PITCH|YAW] value"
+			return 1
+	end
+
+	set type $argv[1]
+	set angle $argv[2]
+	set line $argv[3]
+	set value $argv[4]
+
+
+	sed 's/\(THETA_'$type'_'$angle$line',\) \-\?[0-9]\+\.[0-9]*/\1\ '$value'/g' $subs_file > $new_file
+
+	cat $new_file > $subs_file
+	rm $new_file
+
+end
+
+#substitute 1 W ROLL 3.0
+for line in (csvtool -u SPACE col 1-4 $vars_file)
+		#substitute $line
+		set a (echo $line | tr ' ' '\n')
+		substitute $a
+end
